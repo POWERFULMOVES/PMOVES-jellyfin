@@ -1,0 +1,76 @@
+# PMOVES-Jellyfin - Hardened Architecture Docker Compose
+# Dual-mode operation: standalone (fork) or docked (PMOVES.AI integration)
+
+# Build arguments for image tag
+x-image-args: &image_args
+  JELLYFIN_UPSTREAM: ${JELLYFIN_UPSTREAM:-ghcr.io/jellyfin/jellyfin:latest}
+x-pmoves-image: &pmoves_image
+  image: ${JELLYFIN_IMAGE:-ghcr.io/powerfulmoves/pmoves-jellyfin:pmoves-latest}
+
+services:
+  jellyfin:
+    <<: *pmoves_image
+    container_name: ${CONTAINER_NAME:-pmoves-jellyfin}
+    restart: unless-stopped
+
+    # Dual-mode networks
+    networks:
+      app_network:
+        aliases:
+          - jellyfin
+          - pmoves-jellyfin
+      pmoves_data:
+        # Optional: Only used when docked to parent PMOVES.AI
+        # Networks cannot have health conditions - this is handled by external: true + optional: true
+
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+
+    volumes:
+      # Jellyfin configuration
+      - jellyfin_config:/config:rw
+      - jellyfin_cache:/cache:rw
+      # Media directories - mount your media here
+      - ${MEDIA_PATH:-./media}:/media:rw
+
+    environment:
+      # Published URL for external access
+      - JELLYFIN_PUBLISHED_URL=${JELLYFIN_PUBLISHED_URL:-http://localhost:8096}
+      # TimeZone
+      - TZ=${TZ:-UTC}
+      # PMOVES integration mode (auto-detect)
+      - PMOVES_MODE=${PMOVES_MODE:-standalone}
+      # PMOVES observability
+      - NATS_URL=${NATS_URL:-nats://nats:4222}
+      - LOKI_URL=${LOKI_URL:-http://loki:3100}
+
+    healthcheck:
+      test: ["CMD", "curl", "-fSs", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Networks for dual-mode operation
+networks:
+  # Application network (always created)
+  app_network:
+    name: ${NETWORK_NAME:-pmoves_app}
+    driver: bridge
+    labels:
+      pmoves.network: "true"
+      pmoves.network.type: "app"
+
+  # Data tier network (external when docked to PMOVES.AI)
+  pmoves_data:
+    name: ${PARENT_DATA_NETWORK:-pmoves_data}
+    external: true
+
+# Named volumes for persistence
+volumes:
+  jellyfin_config:
+    name: ${VOLUME_PREFIX:-jellyfin}_config
+    driver: local
+  jellyfin_cache:
+    name: ${VOLUME_PREFIX:-jellyfin}_cache
+    driver: local
