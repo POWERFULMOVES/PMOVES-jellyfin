@@ -156,6 +156,11 @@ namespace Emby.Server.Implementations.Updates
                 _logger.LogError(ex, "The URL configured for the plugin repository manifest URL is not valid: {Manifest}", manifest);
                 return Array.Empty<PackageInfo>();
             }
+            catch (NotSupportedException ex)
+            {
+                _logger.LogError(ex, "The URL scheme configured for the plugin repository is not supported: {Manifest}", manifest);
+                return Array.Empty<PackageInfo>();
+            }
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "An error occurred while accessing the plugin manifest: {Manifest}", manifest);
@@ -522,42 +527,44 @@ namespace Emby.Server.Implementations.Updates
             using var response = await _httpClientFactory.CreateClient(NamedClient.Default)
                 .GetAsync(new Uri(package.SourceUrl), cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-
-            // CA5351: Do Not Use Broken Cryptographic Algorithms
+            Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            await using (stream.ConfigureAwait(false))
+            {
+                // CA5351: Do Not Use Broken Cryptographic Algorithms
 #pragma warning disable CA5351
-            cancellationToken.ThrowIfCancellationRequested();
+                cancellationToken.ThrowIfCancellationRequested();
 
-            var hash = Convert.ToHexString(await MD5.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
-            if (!string.Equals(package.Checksum, hash, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogError(
-                    "The checksums didn't match while installing {Package}, expected: {Expected}, got: {Received}",
-                    package.Name,
-                    package.Checksum,
-                    hash);
-                throw new InvalidDataException("The checksum of the received data doesn't match.");
-            }
-
-            // Version folder as they cannot be overwritten in Windows.
-            targetDir += "_" + package.Version;
-
-            if (Directory.Exists(targetDir))
-            {
-                try
+                var hash = Convert.ToHexString(await MD5.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+                if (!string.Equals(package.Checksum, hash, StringComparison.OrdinalIgnoreCase))
                 {
-                    Directory.Delete(targetDir, true);
+                    _logger.LogError(
+                        "The checksums didn't match while installing {Package}, expected: {Expected}, got: {Received}",
+                        package.Name,
+                        package.Checksum,
+                        hash);
+                    throw new InvalidDataException("The checksum of the received data doesn't match.");
                 }
+
+                // Version folder as they cannot be overwritten in Windows.
+                targetDir += "_" + package.Version;
+
+                if (Directory.Exists(targetDir))
+                {
+                    try
+                    {
+                        Directory.Delete(targetDir, true);
+                    }
 #pragma warning disable CA1031 // Do not catch general exception types
-                catch
+                    catch
 #pragma warning restore CA1031 // Do not catch general exception types
-                {
-                    // Ignore any exceptions.
+                    {
+                        // Ignore any exceptions.
+                    }
                 }
-            }
 
-            stream.Position = 0;
-            ZipFile.ExtractToDirectory(stream, targetDir, true);
+                stream.Position = 0;
+                await ZipFile.ExtractToDirectoryAsync(stream, targetDir, true, cancellationToken).ConfigureAwait(false);
+            }
 
             // Ensure we create one or populate existing ones with missing data.
             await _pluginManager.PopulateManifest(package.PackageInfo, package.Version, targetDir, status).ConfigureAwait(false);

@@ -85,6 +85,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
         private bool _isVaapiDeviceSupportVulkanDrmModifier = false;
         private bool _isVaapiDeviceSupportVulkanDrmInterop = false;
 
+        private bool _canSetProcessPriority = true;
+
         private bool _isVideoToolboxAv1DecodeAvailable = false;
 
         private static string[] _vulkanImageDrmFmtModifierExts =
@@ -414,7 +416,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
         /// <inheritdoc />
         public Task<MediaInfo> GetMediaInfo(MediaInfoRequest request, CancellationToken cancellationToken)
         {
-            var extractChapters = request.MediaType == DlnaProfileType.Video && request.ExtractChapters;
+            var extractChapters = request.ExtractChapters;
             var extraArgs = GetExtraArguments(request);
 
             return GetMediaInfoInternal(
@@ -511,7 +513,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 ? "{0} -i {1} -threads {2} -v warning -print_format json -show_streams -show_chapters -show_format"
                 : "{0} -i {1} -threads {2} -v warning -print_format json -show_streams -show_format";
 
-            if (!isAudio && _proberSupportsFirstVideoFrame)
+            if (protocol == MediaProtocol.File && !isAudio && _proberSupportsFirstVideoFrame)
             {
                 args += " -show_frames -only_first_vframe";
             }
@@ -1123,13 +1125,17 @@ namespace MediaBrowser.MediaEncoding.Encoder
         {
             process.Process.Start();
 
-            try
+            if (_canSetProcessPriority)
             {
-                process.Process.PriorityClass = ProcessPriorityClass.BelowNormal;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Unable to set process priority to BelowNormal for {ProcessFileName}", process.Process.StartInfo.FileName);
+                try
+                {
+                    process.Process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                }
+                catch (Exception ex)
+                {
+                    _canSetProcessPriority = false;
+                    _logger.LogWarning(ex, "Unable to set process priority to BelowNormal for {ProcessFileName}. Further attempts will be skipped.", process.Process.StartInfo.FileName);
+                }
             }
 
             lock (_runningProcessesLock)
@@ -1331,8 +1337,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         public bool CanExtractSubtitles(string codec)
         {
-            // TODO is there ever a case when a subtitle can't be extracted??
-            return true;
+            return _configurationManager.GetEncodingOptions().EnableSubtitleExtraction;
         }
 
         private sealed class ProcessWrapper : IDisposable
