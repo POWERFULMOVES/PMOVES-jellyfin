@@ -69,9 +69,37 @@ public class SeasonPathParserTests
     [InlineData("/media/YouTube/Devyn Johnston/2024-01-24 4070 Ti SUPER in under 7 minutes", "/media/YouTube/Devyn Johnston", null, false)]
     [InlineData("/media/YouTube/Devyn Johnston/2025-01-28 5090 vs 2 SFF Cases", "/media/YouTube/Devyn Johnston", null, false)]
     [InlineData("/Drive/202401244070", "/Drive", null, false)]
+    [InlineData("/Drive/Drive.S01.2160p.WEB-DL.DDP5.1.H.265-XXXX", "/Drive", 1, true)]
+    [InlineData("The Wonder Years/The.Wonder.Years.S04.1080p.PDTV.x264-JCH", "/The Wonder Years", 4, true)]
+    [InlineData("The Wonder Years/[The.Wonder.Years.S04.1080p.PDTV.x264-JCH]", "/The Wonder Years", 4, true)]
+    [InlineData("The Wonder Years/The.Wonder.Years [S04][1080p.PDTV.x264-JCH]", "/The Wonder Years", 4, true)]
+    [InlineData("The Wonder Years/The Wonder Years Season 01 1080p", "/The Wonder Years", 1, true)]
+
     public void GetSeasonNumberFromPathTest(string path, string? parentPath, int? seasonNumber, bool isSeasonDirectory)
     {
         var result = SeasonPathParser.Parse(path, parentPath, true, true);
+
+        Assert.Equal(result.SeasonNumber is not null, result.Success);
+        Assert.Equal(seasonNumber, result.SeasonNumber);
+        Assert.Equal(isSeasonDirectory, result.IsSeasonFolder);
+    }
+
+    [Theory]
+    [InlineData("/Drive/300 Collection/300 (2006)", "/Drive/300 Collection", null, false)]
+    [InlineData("/Drive/300 Collection/300 Rise of an Empire", "/Drive/300 Collection", null, false)]
+    [InlineData("/Drive/300 Collection/1", "/Drive/300 Collection", null, false)]
+    [InlineData("/Drive/300 Collection/300 Disc 1", "/Drive/300 Collection", null, false)]
+    [InlineData("/Drive/28 Years Later Collection/28 Days Later", "/Drive/28 Years Later Collection", null, false)]
+    [InlineData("/Drive/28 Years Later Collection/28 Weeks Later (2007)", "/Drive/28 Years Later Collection", null, false)]
+    [InlineData("/Drive/28 Years Later Collection/28 Years Later 2025", "/Drive/28 Years Later Collection", null, false)]
+    [InlineData("/Drive/300 Collection/Season 1", "/Drive/300 Collection", 1, true)]
+    [InlineData("/Drive/28 Years Later Collection/Season 01", "/Drive/28 Years Later Collection", 1, true)]
+    [InlineData("/Drive/300 Collection/S01", "/Drive/300 Collection", 1, true)]
+    [InlineData("/Drive/300 Collection/S1", "/Drive/300 Collection", 1, true)]
+
+    public void GetSeasonNumberFromPathMixedLibraryTest(string path, string? parentPath, int? seasonNumber, bool isSeasonDirectory)
+    {
+        var result = SeasonPathParser.Parse(path, parentPath, false, false);
 
         Assert.Equal(result.SeasonNumber is not null, result.Success);
         Assert.Equal(seasonNumber, result.SeasonNumber);

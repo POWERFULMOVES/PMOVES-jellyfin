@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Extensions;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -201,6 +202,29 @@ public class SeriesMetadataService : MetadataService<Series, SeriesInfo>
             false);
     }
 
+    private static bool NeedsVirtualSeason(Episode episode, HashSet<Guid> physicalSeasonIds, HashSet<string> physicalSeasonPaths)
+    {
+        // Episode has a known season number, needs a season
+        if (episode.ParentIndexNumber.HasValue)
+        {
+            return true;
+        }
+
+        // Episode has been processed and linked to a season, only needs a virtual season
+        // if it isn't already linked to a known physical season by ID or path
+        if (!episode.SeasonId.IsEmpty())
+        {
+            return !physicalSeasonIds.Contains(episode.SeasonId)
+                && !physicalSeasonPaths.Contains(System.IO.Path.GetDirectoryName(episode.Path) ?? string.Empty);
+        }
+
+        // Episode not yet linked, check if it's in a physical season folder
+        // If yes then skip it, processing not finished
+        // If no then include it, needs Season Unknown
+        var episodeDirectory = System.IO.Path.GetDirectoryName(episode.Path) ?? string.Empty;
+        return !physicalSeasonPaths.Contains(episodeDirectory);
+    }
+
     /// <summary>
     /// Creates seasons for all episodes if they don't exist.
     /// If no season number can be determined, a dummy season will be created.
@@ -212,8 +236,21 @@ public class SeriesMetadataService : MetadataService<Series, SeriesInfo>
     {
         var seriesChildren = series.GetRecursiveChildren(i => i is Episode || i is Season);
         var seasons = seriesChildren.OfType<Season>().ToList();
+        var episodes = seriesChildren.OfType<Episode>().ToList();
+
+        var physicalSeasonIds = seasons
+            .Where(e => e.LocationType != LocationType.Virtual)
+            .Select(e => e.Id)
+            .ToHashSet();
+
+        var physicalSeasonPathSet = seasons
+            .Where(e => e.LocationType != LocationType.Virtual && !string.IsNullOrEmpty(e.Path))
+            .Select(e => e.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var uniqueSeasonNumbers = seriesChildren
             .OfType<Episode>()
+            .Where(e => NeedsVirtualSeason(e, physicalSeasonIds, physicalSeasonPathSet))
             .Select(e => e.ParentIndexNumber >= 0 ? e.ParentIndexNumber : null)
             .Distinct();
 
@@ -225,17 +262,33 @@ public class SeriesMetadataService : MetadataService<Series, SeriesInfo>
             if (existingSeason is null)
             {
                 var seasonName = GetValidSeasonNameForSeries(series, null, seasonNumber);
-                await CreateSeasonAsync(series, seasonName, seasonNumber, cancellationToken).ConfigureAwait(false);
+                var season = await CreateSeasonAsync(series, seasonName, seasonNumber, cancellationToken).ConfigureAwait(false);
+                seasons.Add(season);
             }
             else if (existingSeason.IsVirtualItem)
             {
-                var episodeCount = seriesChildren.OfType<Episode>().Count(e => e.ParentIndexNumber == seasonNumber && !e.IsMissingEpisode);
+                var episodeCount = episodes.Count(e => e.ParentIndexNumber == seasonNumber && !e.IsMissingEpisode);
                 if (episodeCount > 0)
                 {
                     existingSeason.IsVirtualItem = false;
                     await existingSeason.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
                 }
             }
+        }
+
+        // Loop through episodes
+        foreach (var episode in episodes)
+        {
+            var season = seasons.FirstOrDefault(i => i.IndexNumber == episode.ParentIndexNumber);
+            if (season is null || episode.SeasonId.Equals(season.Id))
+            {
+                continue;
+            }
+
+            // Assign the correct season id and name to episode.
+            episode.SeasonId = season.Id;
+            episode.SeasonName = season.Name;
+            await episode.UpdateToRepositoryAsync(ItemUpdateType.MetadataImport, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -247,7 +300,7 @@ public class SeriesMetadataService : MetadataService<Series, SeriesInfo>
     /// <param name="seasonNumber">The season number.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The newly created season.</returns>
-    private async Task CreateSeasonAsync(
+    private async Task<Season> CreateSeasonAsync(
         Series series,
         string? seasonName,
         int? seasonNumber,
@@ -270,6 +323,8 @@ public class SeriesMetadataService : MetadataService<Series, SeriesInfo>
 
         series.AddChild(season);
         await season.RefreshMetadata(new MetadataRefreshOptions(new DirectoryService(FileSystem)), cancellationToken).ConfigureAwait(false);
+
+        return season;
     }
 
     private string GetValidSeasonNameForSeries(Series series, string? seasonName, int? seasonNumber)
